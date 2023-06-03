@@ -71,5 +71,5 @@ fn main() {
     println!();
 
     // Training loop!
-    gpt.train(&dataset, 100000, batch_size);
+    gpt.train(&dataset, 100000, batch_size, &int_to_ch);
 }

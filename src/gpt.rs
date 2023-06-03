@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::funcs::*;
 use crate::graph::{Graph, TensorId};
 use crate::optimizer::Optimizer;
@@ -264,7 +265,7 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
         fs::write("train_data/optimizer.dat", &opt_data).expect("Unable to write file");
     }
 
-    pub fn train(&mut self, dataset: &[usize], num_batches: usize, batch_size: usize) {
+    pub fn train(&mut self, dataset: &[usize], num_batches: usize, batch_size: usize, int_to_ch: &HashMap<usize, char>) {
         for i in 0..num_batches {
             let poses = Tensor::raw(
                 &[batch_size, self.num_tokens],
@@ -299,6 +300,13 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
             if i % 10 == 0 {
                 println!("Saving the model...");
                 self.save();
+                // Generate 100 character with the currently trained model before
+                // starting the training loop.
+                println!("Generating text:");
+                self.infer(100, |ch| {
+                    print!("{}", int_to_ch.get(&ch).unwrap());
+                    std::io::stdout().flush().unwrap();
+                });
             }
         }
     }
