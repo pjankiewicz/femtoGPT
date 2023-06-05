@@ -1,108 +1,52 @@
 use super::*;
-use rayon::prelude::*;
 
-impl<V: TensorElement + std::ops::Add<Output = V>> Add for &Tensor<V> {
-    type Output = Tensor<V>;
-    fn add(self, other: &Tensor<V>) -> Self::Output {
-        &self.view() + &other.view()
-    }
+pub fn binary<
+    'a,
+    V: TensorElement,
+    W: TensorElement,
+    T1: TensorOps<V>,
+    T2: TensorOps<V>,
+    F: Fn(V, V) -> W + Sync + Send,
+>(
+    a: &T1,
+    b: &T2,
+    f: F,
+) -> Tensor<W> {
+    let (a, b, rev) = if a.dim() > b.dim() {
+        (a.view(), b.view(), false)
+    } else {
+        (b.view(), a.view(), true)
+    };
+    a.map(b.dim(), |a| {
+        assert_eq!(a.shape(), b.shape());
+        let (a, b) = if rev { (&b, &a) } else { (&a, &b) };
+        Tensor::raw(
+            a.shape(),
+            a.blob()
+                .iter()
+                .zip(b.blob().iter())
+                .map(|(a, b)| f(*a, *b))
+                .collect(),
+        )
+    })
 }
-impl<'a, V: TensorElement + std::ops::Add<Output = V>> Add<&TensorView<'a, V>> for &Tensor<V> {
-    type Output = Tensor<V>;
-    fn add(self, other: &TensorView<'a, V>) -> Self::Output {
-        &self.view() + other
-    }
-}
-impl<'a, V: TensorElement + std::ops::Add<Output = V>> Add<&Tensor<V>> for &TensorView<'a, V> {
-    type Output = Tensor<V>;
-    fn add(self, other: &Tensor<V>) -> Self::Output {
-        self + &other.view()
-    }
-}
+
 impl<'a, V: TensorElement + std::ops::Add<Output = V>> Add for &TensorView<'a, V> {
     type Output = Tensor<V>;
     fn add(self, other: &TensorView<V>) -> Self::Output {
-        combine_map(self, other, 0, |a, b| {
-            Tensor::scalar(a.scalar() + b.scalar())
-        })
-    }
-}
-
-impl<V: TensorElement + std::ops::Sub<Output = V>> Sub for &Tensor<V> {
-    type Output = Tensor<V>;
-    fn sub(self, other: &Tensor<V>) -> Self::Output {
-        &self.view() - &other.view()
-    }
-}
-impl<'a, V: TensorElement + std::ops::Sub<Output = V>> Sub<&TensorView<'a, V>> for &Tensor<V> {
-    type Output = Tensor<V>;
-    fn sub(self, other: &TensorView<'a, V>) -> Self::Output {
-        &self.view() - other
-    }
-}
-impl<'a, V: TensorElement + std::ops::Sub<Output = V>> Sub<&Tensor<V>> for &TensorView<'a, V> {
-    type Output = Tensor<V>;
-    fn sub(self, other: &Tensor<V>) -> Self::Output {
-        self - &other.view()
+        binary(self, other, |a, b| a + b)
     }
 }
 impl<'a, V: TensorElement + std::ops::Sub<Output = V>> Sub for &TensorView<'a, V> {
     type Output = Tensor<V>;
     fn sub(self, other: &TensorView<V>) -> Self::Output {
-        combine_map(self, other, 0, |a, b| {
-            Tensor::scalar(a.scalar() - b.scalar())
-        })
-    }
-}
-
-impl<V: TensorElement + std::ops::Mul<Output = V>> Mul for &Tensor<V> {
-    type Output = Tensor<V>;
-    fn mul(self, other: &Tensor<V>) -> Self::Output {
-        &self.view() * &other.view()
-    }
-}
-impl<'a, V: TensorElement + std::ops::Mul<Output = V>> Mul<&TensorView<'a, V>> for &Tensor<V> {
-    type Output = Tensor<V>;
-    fn mul(self, other: &TensorView<'a, V>) -> Self::Output {
-        &self.view() * other
-    }
-}
-impl<'a, V: TensorElement + std::ops::Mul<Output = V>> Mul<&Tensor<V>> for &TensorView<'a, V> {
-    type Output = Tensor<V>;
-    fn mul(self, other: &Tensor<V>) -> Self::Output {
-        self * &other.view()
+        binary(self, other, |a, b| a - b)
     }
 }
 impl<'a, V: TensorElement + std::ops::Mul<Output = V>> Mul for &TensorView<'a, V> {
     type Output = Tensor<V>;
     fn mul(self, other: &TensorView<V>) -> Self::Output {
-        combine_map(self, other, 0, |a, b| {
-            Tensor::scalar(a.scalar() * b.scalar())
-        })
-    }
-}
-impl<V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V>> BitXor
-    for &Tensor<V>
-{
-    type Output = Tensor<V>;
-    fn bitxor(self, other: &Tensor<V>) -> Self::Output {
-        &self.view() ^ &other.view()
-    }
-}
-impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V>>
-    BitXor<&TensorView<'a, V>> for &Tensor<V>
-{
-    type Output = Tensor<V>;
-    fn bitxor(self, other: &TensorView<'a, V>) -> Self::Output {
-        &self.view() ^ other
-    }
-}
-impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V>>
-    BitXor<&Tensor<V>> for &TensorView<'a, V>
-{
-    type Output = Tensor<V>;
-    fn bitxor(self, other: &Tensor<V>) -> Self::Output {
-        self ^ &other.view()
+        binary(self, other, |a, b| a * b)
     }
 }
 impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V>> BitXor
@@ -110,39 +54,51 @@ impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V
 {
     type Output = Tensor<V>;
     fn bitxor(self, other: &TensorView<V>) -> Self::Output {
-        combine_map(self, other, 2, |a, b| {
-            let works = a.shape()[0] * b.shape()[1];
-            let data = (0..works)
-                .into_par_iter()
-                .map(|work| {
-                    let j = work % b.shape()[1];
-                    let i = work / b.shape()[1];
-                    let mut sum = <<V as std::ops::Mul>::Output as std::ops::Add>::Output::zero();
-                    for k in 0..a.shape()[1] {
-                        sum = sum + a.blob()[i * a.shape()[1] + k] * b.blob()[k * b.shape()[1] + j];
+        let (a, b, rev) = if self.dim() > other.dim() {
+            (self.view(), other.view(), false)
+        } else {
+            (other.view(), self.view(), true)
+        };
+        a.map(b.dim(), |a| {
+            assert_eq!(a.shape()[..a.dim() - 2], b.shape()[..b.dim() - 2]);
+            let (a, b) = if rev { (&b, &a) } else { (&a, &b) };
+            let data = a
+                .keep_right(2)
+                .inners()
+                .par_iter()
+                .zip(b.keep_right(2).inners().par_iter())
+                .map(|(a, b)| {
+                    let m = a.shape()[0];
+                    let n = a.shape()[1];
+                    let p = b.shape()[1];
+                    let mut result = vec![
+                            <<V as std::ops::Mul>::Output as std::ops::Add>::Output::zero();
+                            m * p
+                        ];
+                    let a_blob = a.blob();
+                    let b_blob = b.blob();
+                    for i in 0..m {
+                        for k in 0..n {
+                            for j in 0..p {
+                                result[i * p + j] =
+                                    result[i * p + j] + a_blob[i * n + k] * b_blob[k * p + j];
+                            }
+                        }
                     }
-                    sum
+                    result
                 })
+                .flatten()
                 .collect();
-            Tensor::raw(&[a.shape()[0], b.shape()[1]], data)
+            let mut final_shape = a.shape().to_vec();
+            final_shape[a.dim() - 1] = b.shape()[b.dim() - 1];
+            Tensor::raw(&final_shape, data)
         })
-    }
-}
-
-impl Not for &Tensor<bool> {
-    type Output = Tensor<bool>;
-
-    fn not(self) -> Self::Output {
-        !&self.view()
     }
 }
 impl<'a> Not for &TensorView<'a, bool> {
     type Output = Tensor<bool>;
 
     fn not(self) -> Self::Output {
-        Tensor {
-            blob: self.blob().iter().map(|b| !b).collect(),
-            shape: self.shape().to_vec(),
-        }
+        self.map_values(|b| !b)
     }
 }

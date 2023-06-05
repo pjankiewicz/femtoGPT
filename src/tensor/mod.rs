@@ -1,9 +1,9 @@
 mod elements;
+mod helper;
 mod ops;
-mod utils;
 pub use elements::*;
+pub use helper::*;
 pub use ops::*;
-pub use utils::*;
 
 use rand::prelude::*;
 use rand_distr::Normal;
@@ -82,6 +82,20 @@ impl<'a, V: 'a + TensorElement, T: TensorMutOps<V>> Iterator for TensorIterMut<'
         self.index += 1;
         ret
     }
+}
+
+pub fn reshape(size: usize, shape: &[usize]) -> Vec<usize> {
+    let mut final_shape = shape.to_vec();
+    if shape[0] == 0 && shape[1..].iter().all(|s| *s != 0) {
+        let mul = shape[1..].iter().fold(1, |c, s| c * s);
+        final_shape[0] = size / mul;
+    } else if shape[shape.len() - 1] == 0 && shape[0..shape.len() - 1].iter().all(|s| *s != 0) {
+        let mul = shape[..shape.len() - 1].iter().fold(1, |c, s| c * s);
+        final_shape[shape.len() - 1] = size / mul;
+    } else {
+        assert!(shape.iter().all(|s| *s != 0));
+    };
+    final_shape
 }
 
 pub trait TensorMutOps<V: TensorElement>: TensorOps<V> {
@@ -312,7 +326,7 @@ pub trait TensorOps<V: TensorElement>: Sized + Into<Tensor<V>> + Send + Sync {
         self.map(2, |m| {
             let d0 = m.shape()[0];
             let d1 = m.shape()[1];
-            let mut dat = Vec::new();
+            let mut dat = Vec::with_capacity(d1 * d0);
             for j in 0..d1 {
                 for i in 0..d0 {
                     dat.push(m.blob()[i * d1 + j]);
@@ -432,21 +446,10 @@ impl<V: TensorElement> Tensor<V> {
     }
 
     pub fn jacobian<F: Fn(usize, usize) -> V + Sync + Send>(n: usize, f: F) -> Tensor<V> {
-        let mut blob = (0..n * n)
-            .into_par_iter()
-            .map(|work| {
-                let i = work / n;
-                let j = work % n;
-                if j >= i {
-                    f(i, j)
-                } else {
-                    V::zero()
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut blob = vec![V::zero(); n * n];
         for i in 0..n {
-            for j in 0..i {
-                blob[i * n + j] = blob[j * n + i];
+            for j in 0..n {
+                blob[i * n + j] = f(i, j);
             }
         }
         Tensor::raw(&[n, n], blob)
@@ -468,17 +471,6 @@ impl<V: TensorElement> Tensor<V> {
             shape: shape.to_vec(),
         }
     }
-    pub fn stack<T: TensorOps<V>>(inps: &[T]) -> Self {
-        let mut shape = inps
-            .get(0)
-            .expect("No tensors to be concatenated!")
-            .shape()
-            .to_vec();
-        inps.iter().all(|t| t.shape() == shape);
-        let blob = inps.iter().map(|t| t.blob().to_vec()).flatten().collect();
-        shape.insert(0, inps.len());
-        Tensor::raw(&shape, blob)
-    }
     pub fn cat<T: TensorOps<V>>(inps: &[&T]) -> Self {
         let shape = inps
             .get(0)
@@ -489,7 +481,7 @@ impl<V: TensorElement> Tensor<V> {
         let each_sz = inps.get(0).unwrap().size();
         let group_size = shape.last().unwrap();
         let mut offset = 0;
-        let mut data: Vec<V> = Vec::new();
+        let mut data: Vec<V> = Vec::with_capacity(each_sz * inps.len());
 
         while offset < each_sz {
             for inp in inps {

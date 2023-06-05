@@ -4,6 +4,7 @@ use crate::graph::{Graph, TensorId};
 use crate::optimizer::Optimizer;
 use crate::tensor::{Tensor, TensorMutOps, TensorOps};
 use rand::Rng;
+use std::time::Instant;
 
 use std::fs;
 use std::fs::*;
@@ -29,8 +30,8 @@ fn sample_dataset<R: Rng>(
     context_size: usize,
     rng: &mut R,
 ) -> (Tensor<usize>, Tensor<usize>) {
-    let mut xs: Vec<usize> = Vec::new();
-    let mut ys: Vec<usize> = Vec::new();
+    let mut xs: Vec<usize> = Vec::with_capacity(batch_size * context_size);
+    let mut ys: Vec<usize> = Vec::with_capacity(batch_size * context_size);
     for _i in 0..batch_size {
         let start: usize = rng.gen_range(0..dataset.len());
         let all = dataset
@@ -54,13 +55,21 @@ fn embed(s: &Tensor<usize>, embedding: &Tensor<f32>) -> Tensor<f32> {
     s.map(0, |s| embedding.get(s.scalar()).into())
 }
 
-fn unembed(s: &Tensor<usize>, s_result: &Tensor<f32>, embedding: &mut Tensor<f32>) -> Tensor<f32> {
-    let _degree = s_result.shape()[s_result.dim() - 1];
+use std::collections::HashMap;
+fn unembed(s: &Tensor<usize>, s_result: &Tensor<f32>, embedding: &mut Tensor<f32>) {
+    let mut embeds: HashMap<usize, Vec<Tensor<f32>>> = HashMap::new();
     for (ch, embed) in s.blob().iter().zip(s_result.keep_right(1).inners().iter()) {
-        let mut t = embedding.get_mut(*ch);
-        t.set(embed.clone());
+        embeds.entry(*ch).or_default().push(embed.clone().into());
     }
-    Tensor::scalar(0.)
+    for (ch, vals) in embeds {
+        let mut avg = Tensor::scalar(0.);
+        for v in vals.iter() {
+            avg = &avg + v;
+        }
+        avg = &avg * &Tensor::scalar(1. / vals.len() as f32);
+        let mut t = embedding.get_mut(ch);
+        t.set(avg.clone());
+    }
 }
 
 fn select<T: TensorOps<f32>>(t: &T) -> usize {
@@ -267,6 +276,7 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
 
     pub fn train(&mut self, dataset: &[usize], num_batches: usize, batch_size: usize, int_to_ch: &HashMap<usize, char>) {
         for i in 0..num_batches {
+            let timer = Instant::now();
             let poses = Tensor::raw(
                 &[batch_size, self.num_tokens],
                 (0..self.num_tokens)
@@ -284,7 +294,12 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
             let err = self
                 .graph
                 .backward_all(self.output, CrossEntropy::new(self.vocab_size, ys.clone()));
-            println!("Step: {} Loss: {}", i, err);
+            println!(
+                "Step: {} Loss: {} (Elapsed: {}ms)",
+                i,
+                err,
+                timer.elapsed().as_millis()
+            );
             self.graph
                 .optimize(&mut self.optimizer, &self.params.iter().cloned().collect());
             unembed(
@@ -311,9 +326,10 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
         }
     }
 
-    pub fn infer<F: Fn(usize) -> ()>(&mut self, count: usize, callback: F) {
-        let mut cnt = 1;
+    pub fn infer<F: Fn(usize) -> ()>(&mut self, prompt: &[usize], count: usize, callback: F) {
+        let mut cnt = prompt.len();
         let mut context = vec![0; self.num_tokens];
+        context[..prompt.len()].copy_from_slice(prompt);
         let poses = Tensor::raw(&[1, self.num_tokens], (0..self.num_tokens).collect());
         self.graph
             .load(self.pos_input, &embed(&poses, &self.pos_embedding));

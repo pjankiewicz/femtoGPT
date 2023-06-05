@@ -32,6 +32,7 @@ impl Function for LayerNorm {
     }
     fn grad(&self, inps: &[&Tensor<f32>], out_grad: &Tensor<f32>) -> Vec<Tensor<f32>> {
         let jacobian = inps[0].map(1, |l| {
+            let inp1_blob = inps[1].blob();
             let n = l.size();
             let n_inv = 1. / n as f32;
             let avg = l.blob().iter().sum::<f32>() * n_inv;
@@ -41,15 +42,15 @@ impl Function for LayerNorm {
             let sigma_inv = 1. / sigma;
             Tensor::jacobian(n, |i, j| {
                 let a = l.blob()[i];
-                if i == j {
+                (if i == j {
                     ((1. - n_inv) * sigma - (a - avg).powi(2) * sigma_inv * n_inv) * sigma2_inv
                 } else {
                     let b = l.blob()[j];
                     (-n_inv * sigma - (b - avg) * (a - avg) * sigma_inv * n_inv) * sigma2_inv
-                }
+                }) * inp1_blob[j]
             })
         });
-        let inp0_out = &(inps[1] * &jacobian) ^ &out_grad.unsqueeze(-1);
+        let inp0_out = &jacobian ^ &out_grad.unsqueeze(-1);
         vec![
             inp0_out.squeeze(-1).into(),
             out_grad * &self.norm,
