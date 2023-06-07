@@ -226,7 +226,7 @@ pub trait TensorOps<V: TensorElement>: Sized + Into<Tensor<V>> + Send + Sync {
 
     fn map_values<W: TensorElement, F: Fn(V) -> W + Sync + Send>(&self, f: F) -> Tensor<W> {
         Tensor {
-            blob: self.blob().par_iter().map(|v| f(*v)).collect::<Vec<_>>(),
+            blob: self.blob().iter().map(|v| f(*v)).collect::<Vec<_>>(),
             shape: self.shape().to_vec(),
         }
     }
@@ -239,7 +239,7 @@ pub trait TensorOps<V: TensorElement>: Sized + Into<Tensor<V>> + Send + Sync {
         let blob = self
             .keep_right(dim)
             .inners()
-            .into_par_iter()
+            .into_iter()
             .map(|v| f(v))
             .collect::<Vec<_>>();
         assert!(blob.iter().all(|t| t.shape() == blob[0].shape()));
@@ -327,9 +327,10 @@ pub trait TensorOps<V: TensorElement>: Sized + Into<Tensor<V>> + Send + Sync {
             let d0 = m.shape()[0];
             let d1 = m.shape()[1];
             let mut dat = Vec::with_capacity(d1 * d0);
+            let m_blob = m.blob();
             for j in 0..d1 {
                 for i in 0..d0 {
-                    dat.push(m.blob()[i * d1 + j]);
+                    dat.push(m_blob[i * d1 + j]);
                 }
             }
             Tensor::raw(&[d1, d0], dat)
@@ -444,16 +445,6 @@ impl<V: TensorElement> Tensor<V> {
     pub fn ones(shape: &[usize]) -> Self {
         Self::constant(shape, V::one())
     }
-
-    pub fn jacobian<F: Fn(usize, usize) -> V + Sync + Send>(n: usize, f: F) -> Tensor<V> {
-        let mut blob = vec![V::zero(); n * n];
-        for i in 0..n {
-            for j in 0..n {
-                blob[i * n + j] = f(i, j);
-            }
-        }
-        Tensor::raw(&[n, n], blob)
-    }
     pub fn rand_range<R: Rng>(r: &mut R, start: f32, end: f32, shape: &[usize]) -> Tensor<f32> {
         Tensor::<f32> {
             blob: (0..shape.iter().fold(1, |curr, s| curr * s))
@@ -498,9 +489,10 @@ impl<V: TensorElement> Tensor<V> {
         let group_size = inp.shape().last().unwrap() / cnt;
         let mut result = vec![Vec::<V>::new(); cnt];
         let mut offset = 0;
+        let inp_blob = inp.blob();
         while offset < inp.size() {
             for i in 0..cnt {
-                result[i].extend(&inp.blob()[offset..offset + group_size]);
+                result[i].extend(&inp_blob[offset..offset + group_size]);
                 offset += group_size;
             }
         }

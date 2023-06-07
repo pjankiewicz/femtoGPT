@@ -1,6 +1,6 @@
 use super::{Function, Tensor, TensorOps};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Softmax {
     out: Tensor<f32>,
 }
@@ -18,32 +18,40 @@ impl Function for Softmax {
                 .blob()
                 .iter()
                 .fold(f32::NEG_INFINITY, |a, b| f32::max(a, *b));
-            let sum = l
-                .map_values(|f| (f - max).exp())
-                .inners()
-                .iter()
-                .map(|t| t.scalar())
-                .sum::<f32>();
+            let sum = l.blob().iter().map(|f| (f - max).exp()).sum::<f32>();
             l.map_values(|f| (f - max).exp() / sum)
         });
 
         self.out.clone()
     }
     fn grad(&self, _inps: &[&Tensor<f32>], out_grad: &Tensor<f32>) -> Vec<Tensor<f32>> {
-        let jacobian = self.out.map(1, |l| {
-            let n = l.shape()[0];
-            Tensor::jacobian(n, |i, j| {
-                let si = l.blob()[i];
-                if i == j {
-                    si * (1. - si)
-                } else {
-                    let sj = l.blob()[j];
-                    -si * sj
+        let grad_inp0 = self
+            .out
+            .keep_right(1)
+            .inners()
+            .iter()
+            .zip(out_grad.keep_right(1).inners().iter())
+            .map(|(l, o)| {
+                let l_blob = l.blob();
+                let o_blob = o.blob();
+                let n = l.shape()[0];
+                let mut data = vec![0.; n];
+                for i in 0..n {
+                    let si = l_blob[i];
+                    let mut sum = 0.;
+                    for j in 0..n {
+                        let sj = l_blob[j];
+                        sum += (if i == j { si * (1. - si) } else { -si * sj }) * o_blob[j];
+                    }
+                    data[i] = sum;
                 }
+                data
             })
-        });
-
-        let out = &jacobian ^ &out_grad.unsqueeze(-1);
-        vec![out.squeeze(-1).into()]
+            .flatten()
+            .collect::<Vec<_>>();
+        vec![Tensor::raw(out_grad.shape(), grad_inp0)]
+    }
+    fn clone_box(&self) -> Box<dyn Function> {
+        Box::new(self.clone())
     }
 }

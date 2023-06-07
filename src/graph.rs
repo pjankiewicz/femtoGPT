@@ -8,14 +8,32 @@ pub type TensorId = usize;
 
 struct Computation {
     inps: Vec<TensorId>,
-    out: TensorId,
     func: Box<dyn Function>,
 }
 
+impl Clone for Computation {
+    fn clone(&self) -> Self {
+        Self {
+            inps: self.inps.clone(),
+            func: self.func.clone_box(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Env {
+    tensors: BTreeMap<TensorId, Tensor<f32>>,
+    grads: BTreeMap<TensorId, Tensor<f32>>,
+}
+
+unsafe impl Send for Computation {}
+unsafe impl Sync for Computation {}
+
+#[derive(Clone)]
 pub struct Graph {
     tensors: BTreeMap<TensorId, Tensor<f32>>,
     grads: BTreeMap<TensorId, Tensor<f32>>,
-    computations: Vec<Computation>,
+    computations: BTreeMap<TensorId, Computation>,
 }
 
 impl Graph {
@@ -37,6 +55,9 @@ impl Graph {
     pub fn load<T: TensorOps<f32>>(&mut self, tensor_id: TensorId, tensor: &T) {
         self.tensors.insert(tensor_id, tensor.view().into());
     }
+    pub fn load_grad<T: TensorOps<f32>>(&mut self, tensor_id: TensorId, tensor: &T) {
+        self.grads.insert(tensor_id, tensor.view().into());
+    }
     pub fn zero_grad(&mut self) {
         self.grads.clear();
     }
@@ -55,8 +76,16 @@ impl Graph {
     pub fn get(&self, id: TensorId) -> &Tensor<f32> {
         self.tensors.get(&id).expect("Tensor not found!")
     }
-    pub fn backward(&mut self, id: TensorId) {
-        if let Some(comp) = self.computations.iter().find(|c| c.out == id) {
+    pub fn get_grad(&self, id: TensorId) -> &Tensor<f32> {
+        self.grads.get(&id).expect("Tensor not found!")
+    }
+    pub fn backward_all(&mut self, id: TensorId, loss_fn: Box<dyn Loss>) -> f32 {
+        let output = self.get(id);
+        let (loss, grad) = loss_fn.run(output);
+        let mean_coeff = 1. / loss.size() as f32;
+        self.add_grad(id, &grad * &Tensor::scalar(mean_coeff));
+
+        for (id, comp) in self.computations.clone().iter().rev() {
             for inp in comp.inps.iter() {
                 let shape = self.get(*inp).shape().to_vec();
                 self.grads
@@ -74,34 +103,18 @@ impl Graph {
                 self.add_grad(id, grad);
             }
         }
-    }
-    pub fn backward_all(&mut self, id: TensorId, loss_fn: Box<dyn Loss>) -> f32 {
-        let output = self.get(id);
-        let (loss, grad) = loss_fn.run(output);
-        let mean_coeff = 1. / loss.size() as f32;
-        self.add_grad(id, &grad * &Tensor::scalar(mean_coeff));
-
-        let backward_order = self
-            .computations
-            .iter()
-            .map(|c| c.out)
-            .rev()
-            .collect::<Vec<_>>();
-        for id in backward_order {
-            self.backward(id);
-        }
 
         loss.mean()
     }
     pub fn forward(&mut self, training: bool) {
-        for c in self.computations.iter_mut() {
+        for (out, c) in self.computations.iter_mut() {
             let tensors = c
                 .inps
                 .iter()
                 .map(|id| self.tensors.get(id).expect("Tensor not found!"))
                 .collect::<Vec<_>>();
             let result = c.func.run(&tensors, training);
-            self.tensors.insert(c.out, result);
+            self.tensors.insert(*out, result);
         }
     }
     pub fn call(&mut self, mut f: Box<dyn Function>, tensor_ids: &[TensorId]) -> TensorId {
@@ -111,11 +124,13 @@ impl Graph {
             .collect::<Vec<_>>();
         let out = f.run(&tensors, false);
         let child = self.alloc(out);
-        self.computations.push(Computation {
-            func: f,
-            out: child,
-            inps: tensor_ids.to_vec(),
-        });
+        self.computations.insert(
+            child,
+            Computation {
+                func: f,
+                inps: tensor_ids.to_vec(),
+            },
+        );
         child
     }
     pub fn optimize<O: Optimizer>(&mut self, opt: &mut O, params: &HashSet<TensorId>) {

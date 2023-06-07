@@ -49,8 +49,10 @@ impl<'a, V: TensorElement + std::ops::Mul<Output = V>> Mul for &TensorView<'a, V
         binary(self, other, |a, b| a * b)
     }
 }
-impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V>> BitXor
-    for &TensorView<'a, V>
+impl<
+        'a,
+        V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V> + std::ops::AddAssign,
+    > BitXor for &TensorView<'a, V>
 {
     type Output = Tensor<V>;
     fn bitxor(self, other: &TensorView<V>) -> Self::Output {
@@ -65,8 +67,8 @@ impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V
             let data = a
                 .keep_right(2)
                 .inners()
-                .par_iter()
-                .zip(b.keep_right(2).inners().par_iter())
+                .iter()
+                .zip(b.keep_right(2).inners().iter())
                 .map(|(a, b)| {
                     let m = a.shape()[0];
                     let n = a.shape()[1];
@@ -80,8 +82,7 @@ impl<'a, V: TensorElement + std::ops::Mul<Output = V> + std::ops::Add<Output = V
                     for i in 0..m {
                         for k in 0..n {
                             for j in 0..p {
-                                result[i * p + j] =
-                                    result[i * p + j] + a_blob[i * n + k] * b_blob[k * p + j];
+                                result[i * p + j] += a_blob[i * n + k] * b_blob[k * p + j];
                             }
                         }
                     }
