@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::funcs::*;
 use crate::graph::{Graph, TensorId};
 use crate::optimizer::Optimizer;
@@ -57,6 +56,8 @@ fn embed(s: &Tensor<usize>, embedding: &Tensor<f32>) -> Tensor<f32> {
 }
 
 use std::collections::HashMap;
+use crate::tokenizer::{SimpleTokenizer, Tokenizer};
+
 fn unembed(s: &Tensor<usize>, s_result: &Tensor<f32>, embedding: &mut Tensor<f32>) {
     let mut embeds: HashMap<usize, Vec<Tensor<f32>>> = HashMap::new();
     for (ch, embed) in s.blob().iter().zip(s_result.keep_right(1).inners().iter()) {
@@ -257,7 +258,7 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
         fs::write("train_data/optimizer.dat", &opt_data).expect("Unable to write file");
     }
 
-    pub fn train(&mut self, dataset: &[usize], num_batches: usize, batch_size: usize, int_to_ch: &HashMap<usize, char>) {
+    pub fn train(&mut self, dataset: &[usize], num_batches: usize, batch_size: usize, tokenizer: &SimpleTokenizer) {
         for i in 0..num_batches {
             let timer = Instant::now();
             let (graphs, errs): (Vec<Graph>, Vec<f32>) = (0..batch_size)
@@ -326,8 +327,8 @@ impl<O: Optimizer, R: Rng> GPT<O, R> {
                 // Generate 100 character with the currently trained model before
                 // starting the training loop.
                 println!("Generating text:");
-                self.infer(100, |ch| {
-                    print!("{}", int_to_ch.get(&ch).unwrap());
+                self.infer(&tokenizer.tokenize("\n"), 100, |ch| {
+                    print!("{}", tokenizer.untokenize(&[ch]));
                     std::io::stdout().flush().unwrap();
                 });
             }
